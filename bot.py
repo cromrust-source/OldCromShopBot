@@ -1,13 +1,13 @@
+import os
 import aiohttp
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils import executor
 from datetime import datetime
 
-from config import BOT_TOKEN, ADMIN_ID, SERVER_IP, API_PORT, API_SECRET_KEY
 from database import (
     init_db, get_or_create_user, update_balance, get_balance,
     add_deposit_request, get_pending_deposit_requests, approve_deposit, reject_deposit,
@@ -17,6 +17,23 @@ from database import (
     set_referrer, get_referral_code, get_referrer_code, get_referrals_list, get_referral_bonus_total
 )
 from parser import PRIVILEGES, fetch_prices
+
+# ---------- Переменные окружения ----------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+SERVER_IP = os.getenv("SERVER_IP")
+API_PORT = int(os.getenv("API_PORT", 1234))
+API_SECRET_KEY = os.getenv("API_SECRET_KEY")
+
+# Проверка наличия обязательных переменных
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не задан в переменных окружения")
+if not ADMIN_ID:
+    raise ValueError("ADMIN_ID не задан")
+if not SERVER_IP:
+    raise ValueError("SERVER_IP не задан")
+if not API_SECRET_KEY:
+    raise ValueError("API_SECRET_KEY не задан")
 
 CARD_NUMBER = "2200700538676841"
 
@@ -42,6 +59,21 @@ class AdminAddBalanceStates(StatesGroup):
 class ReferralCodeStates(StatesGroup):
     waiting_code = State()
 
+# ------------------ Клавиатура ------------------
+def get_reply_keyboard(is_admin_user: bool = False):
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    buttons = [
+        KeyboardButton("📜 Каталог"),
+        KeyboardButton("💰 Профиль"),
+        KeyboardButton("➕ Пополнить баланс"),
+        KeyboardButton("❓ Помощь"),
+        KeyboardButton("🔄 Рестарт")
+    ]
+    if is_admin_user:
+        buttons.append(KeyboardButton("👑 Админ-панель"))
+    keyboard.add(*buttons)
+    return keyboard
+
 # ------------------ Вспомогательные функции ------------------
 async def execute_on_server(command: str) -> bool:
     url = f"http://{SERVER_IP}:{API_PORT}/"
@@ -58,16 +90,17 @@ async def execute_on_server(command: str) -> bool:
 def is_admin(user_id: int) -> bool:
     return user_id in get_admins() or user_id == ADMIN_ID
 
-def get_main_keyboard(is_admin_user: bool = False):
-    keyboard = InlineKeyboardMarkup(row_width=2)
+def get_categories_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(
-        InlineKeyboardButton("📜 Каталог", callback_data="show_catalog"),
-        InlineKeyboardButton("💰 Профиль", callback_data="profile"),
-        InlineKeyboardButton("➕ Пополнить баланс", callback_data="deposit_start"),
-        InlineKeyboardButton("❓ Помощь", callback_data="help")
+        InlineKeyboardButton("👑 Привилегии (VIP, PREMIUM, DELUXE, ELITE, CEZAR)", callback_data="cat_privileges"),
+        InlineKeyboardButton("⚡ Улучшения (Доп ХП, Доп урон, Регенерация)", callback_data="cat_upgrades"),
+        InlineKeyboardButton("⭐ Спонсор", callback_data="cat_sponsor"),
+        InlineKeyboardButton("🛠️ Инструменты и наборы", callback_data="cat_tools"),
+        InlineKeyboardButton("🔫 Оружие и защита", callback_data="cat_weapons"),
+        InlineKeyboardButton("🏆 Король сервера", callback_data="cat_king"),
+        InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
     )
-    if is_admin_user:
-        keyboard.add(InlineKeyboardButton("👑 Админ-панель", callback_data="admin_panel"))
     return keyboard
 
 def get_admin_keyboard():
@@ -93,19 +126,6 @@ def get_manage_admins_keyboard():
     )
     return keyboard
 
-def get_categories_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton("👑 Привилегии (VIP, PREMIUM, DELUXE, ELITE, CEZAR)", callback_data="cat_privileges"),
-        InlineKeyboardButton("⚡ Улучшения (Доп ХП, Доп урон, Регенерация)", callback_data="cat_upgrades"),
-        InlineKeyboardButton("⭐ Спонсор", callback_data="cat_sponsor"),
-        InlineKeyboardButton("🛠️ Инструменты и наборы", callback_data="cat_tools"),
-        InlineKeyboardButton("🔫 Оружие и защита", callback_data="cat_weapons"),
-        InlineKeyboardButton("🏆 Король сервера", callback_data="cat_king"),
-        InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
-    )
-    return keyboard
-
 # ------------------ Обработчики команд ------------------
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
@@ -119,23 +139,24 @@ async def cmd_start(message: types.Message):
         "3️⃣ Товар будет куплен за счёт вашего баланса\n"
         "4️⃣ Если баланса не хватает, пополните его через кнопку «➕ Пополнить баланс»\n\n"
         "📌 По всем вопросам: @nonuks\n\n"
-        "👇 Нажмите кнопку ниже, чтобы начать."
+        "👇 Используйте кнопки ниже."
     )
     photo_url = "https://gspics.org/images/2026/04/19/IA3Ulv.png"
-    await bot.send_photo(message.chat.id, photo=photo_url, caption=welcome_text, parse_mode="Markdown", reply_markup=get_main_keyboard(is_admin(message.from_user.id)))
+    await bot.send_photo(
+        message.chat.id,
+        photo=photo_url,
+        caption=welcome_text,
+        parse_mode="Markdown",
+        reply_markup=get_reply_keyboard(is_admin(message.from_user.id))
+    )
 
 @dp.message_handler(commands=['catalog'])
 async def cmd_catalog(message: types.Message):
     await message.answer("📁 **Выберите категорию товаров:**", parse_mode="Markdown", reply_markup=get_categories_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data == "show_catalog")
-async def show_catalog(callback: types.CallbackQuery):
-    await callback.message.answer("📁 **Выберите категорию товаров:**", parse_mode="Markdown", reply_markup=get_categories_keyboard())
-    await callback.answer()
-
-@dp.callback_query_handler(lambda c: c.data == "profile")
-async def profile(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
+@dp.message_handler(commands=['profile'])
+async def cmd_profile(message: types.Message):
+    user_id = message.from_user.id
     user = get_or_create_user(user_id)
     balance = user['balance']
     code = get_referral_code(user_id)
@@ -157,7 +178,79 @@ async def profile(callback: types.CallbackQuery):
     else:
         text += f"\n🔗 **Вы приглашены пользователем с кодом:** `{referrer_code}`"
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
-    await callback.message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+@dp.message_handler(commands=['deposit'])
+async def cmd_deposit(message: types.Message, state: FSMContext):
+    await message.answer("💸 **Введите сумму пополнения в рублях** (целое число):")
+    await DepositStates.waiting_amount.set()
+
+@dp.message_handler(commands=['help'])
+async def cmd_help(message: types.Message):
+    help_text = (
+        "❓ **Помощь**\n\n"
+        "1️⃣ **Как купить привилегию?**\n"
+        "   • Выберите товар в каталоге\n"
+        "   • Укажите ваш Steam ID\n"
+        "   • Если баланса достаточно, товар активируется сразу\n"
+        "   • Если недостаточно – пополните баланс через кнопку «➕ Пополнить баланс»\n\n"
+        "2️⃣ **Как пополнить баланс?**\n"
+        "   • Нажмите «➕ Пополнить баланс»\n"
+        "   • Введите сумму\n"
+        "   • Переведите деньги на карту и отправьте скриншот\n"
+        "   • После проверки администратором деньги поступят на баланс\n\n"
+        "3️⃣ **Реферальная программа**\n"
+        "   • Ваш уникальный код можно найти в профиле\n"
+        "   • Друг вводит ваш код в своём профиле (кнопка «Ввести код друга»)\n"
+        "   • Вы будете получать 10% от каждого пополнения друга\n\n"
+        "4️⃣ **Где взять Steam ID?**\n"
+        "   • Откройте свой профиль Steam → щёлкните правой кнопкой мыши → «Копировать URL»\n"
+        "   • Или используйте сайт steamid.io\n\n"
+        "📌 По всем вопросам: @nonuks"
+    )
+    await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message_handler(commands=['admin'])
+async def cmd_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("У вас нет доступа.")
+        return
+    await message.answer("👑 **Админ-панель**", parse_mode="Markdown", reply_markup=get_admin_keyboard())
+
+# ------------------ Обработчики Reply-кнопок ------------------
+@dp.message_handler(lambda message: message.text == "📜 Каталог")
+async def reply_catalog(message: types.Message):
+    await cmd_catalog(message)
+
+@dp.message_handler(lambda message: message.text == "💰 Профиль")
+async def reply_profile(message: types.Message):
+    await cmd_profile(message)
+
+@dp.message_handler(lambda message: message.text == "➕ Пополнить баланс")
+async def reply_deposit(message: types.Message, state: FSMContext):
+    await cmd_deposit(message, state)
+
+@dp.message_handler(lambda message: message.text == "❓ Помощь")
+async def reply_help(message: types.Message):
+    await cmd_help(message)
+
+@dp.message_handler(lambda message: message.text == "🔄 Рестарт")
+async def reply_restart(message: types.Message):
+    await cmd_start(message)
+
+@dp.message_handler(lambda message: message.text == "👑 Админ-панель")
+async def reply_admin(message: types.Message):
+    await cmd_admin(message)
+
+# ------------------ Обработчики callback ------------------
+@dp.callback_query_handler(lambda c: c.data == "back_to_main")
+async def back_to_main(callback: types.CallbackQuery):
+    welcome_text = (
+        "✨ **Добро пожаловать в магазин Old Crom!** ✨\n\n"
+        "Используйте кнопки ниже для навигации."
+    )
+    await callback.message.edit_text(welcome_text, parse_mode="Markdown")
+    await callback.message.answer("Главное меню:", reply_markup=get_reply_keyboard(is_admin(callback.from_user.id)))
     await callback.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "enter_referral_code")
@@ -176,12 +269,7 @@ async def process_referral_code(message: types.Message, state: FSMContext):
         await message.answer("❌ Неверный код или вы уже привязаны к другому рефереру. Проверьте код и попробуйте снова.")
     await state.finish()
 
-@dp.callback_query_handler(lambda c: c.data == "deposit_start")
-async def deposit_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("💸 **Введите сумму пополнения в рублях** (целое число):")
-    await DepositStates.waiting_amount.set()
-    await callback.answer()
-
+# ------------------ Пополнение баланса ------------------
 @dp.message_handler(state=DepositStates.waiting_amount)
 async def deposit_amount(message: types.Message, state: FSMContext):
     try:
@@ -230,6 +318,31 @@ async def deposit_screenshot(message: types.Message, state: FSMContext):
         await bot.send_document(ADMIN_ID, file_id, caption=admin_text, reply_markup=kb, parse_mode=None)
     await message.answer("✅ Заявка на пополнение отправлена администратору. После проверки деньги поступят на баланс.")
     await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data.startswith("deposit_approve_"))
+async def deposit_approve(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав.", show_alert=True)
+        return
+    request_id = int(callback.data.split("_")[2])
+    user_id, amount = approve_deposit(request_id)
+    if user_id:
+        await bot.send_message(user_id, f"✅ Ваш баланс пополнен на {amount} ₽!")
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ **ОДОБРЕНО**", reply_markup=None)
+        await callback.answer("Пополнение одобрено.")
+    else:
+        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ **ЗАЯВКА НЕ НАЙДЕНА**", reply_markup=None)
+        await callback.answer("Ошибка.")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("deposit_reject_"))
+async def deposit_reject(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав.", show_alert=True)
+        return
+    request_id = int(callback.data.split("_")[2])
+    reject_deposit(request_id)
+    await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ **ОТКЛОНЕНО**", reply_markup=None)
+    await callback.answer("Заявка отклонена.")
 
 # ------------------ Покупка товара ------------------
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_"))
@@ -373,14 +486,7 @@ async def process_steam_id(message: types.Message, state: FSMContext):
         await message.answer("❌ Произошла ошибка при выдаче. Средства возвращены на баланс. Администратор уведомлён.")
     await state.finish()
 
-# ------------------ Админ-панель ------------------
-@dp.message_handler(commands=['admin'])
-async def cmd_admin(message: types.Message):
-    if not is_admin(message.from_user.id):
-        await message.answer("У вас нет доступа.")
-        return
-    await message.answer("👑 **Админ-панель**", parse_mode="Markdown", reply_markup=get_admin_keyboard())
-
+# ------------------ Админ-панель (callback) ------------------
 @dp.callback_query_handler(lambda c: c.data == "admin_panel")
 async def admin_panel(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -437,31 +543,6 @@ async def admin_deposits(callback: types.CallbackQuery):
         else:
             await callback.message.answer(text, reply_markup=kb)
     await callback.answer()
-
-@dp.callback_query_handler(lambda c: c.data.startswith("deposit_approve_"))
-async def deposit_approve(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("У вас нет прав.", show_alert=True)
-        return
-    request_id = int(callback.data.split("_")[2])
-    user_id, amount = approve_deposit(request_id)
-    if user_id:
-        await bot.send_message(user_id, f"✅ Ваш баланс пополнен на {amount} ₽!")
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ **ОДОБРЕНО**", reply_markup=None)
-        await callback.answer("Пополнение одобрено.")
-    else:
-        await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ **ЗАЯВКА НЕ НАЙДЕНА**", reply_markup=None)
-        await callback.answer("Ошибка.")
-
-@dp.callback_query_handler(lambda c: c.data.startswith("deposit_reject_"))
-async def deposit_reject(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("У вас нет прав.", show_alert=True)
-        return
-    request_id = int(callback.data.split("_")[2])
-    reject_deposit(request_id)
-    await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ **ОТКЛОНЕНО**", reply_markup=None)
-    await callback.answer("Заявка отклонена.")
 
 @dp.callback_query_handler(lambda c: c.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
@@ -570,43 +651,7 @@ async def admin_list(callback: types.CallbackQuery):
     await callback.message.answer(text, parse_mode="Markdown")
     await callback.answer()
 
-# ------------------ Остальные обработчики ------------------
-@dp.callback_query_handler(lambda c: c.data == "help")
-async def show_help(callback: types.CallbackQuery):
-    help_text = (
-        "❓ **Помощь**\n\n"
-        "1️⃣ **Как купить привилегию?**\n"
-        "   • Выберите товар в каталоге\n"
-        "   • Укажите ваш Steam ID\n"
-        "   • Если баланса достаточно, товар активируется сразу\n"
-        "   • Если недостаточно – пополните баланс через кнопку «➕ Пополнить баланс»\n\n"
-        "2️⃣ **Как пополнить баланс?**\n"
-        "   • Нажмите «➕ Пополнить баланс»\n"
-        "   • Введите сумму\n"
-        "   • Переведите деньги на карту и отправьте скриншот\n"
-        "   • После проверки администратором деньги поступят на баланс\n\n"
-        "3️⃣ **Реферальная программа**\n"
-        "   • Ваш уникальный код можно найти в профиле\n"
-        "   • Друг вводит ваш код в своём профиле (кнопка «Ввести код друга»)\n"
-        "   • Вы будете получать 10% от каждого пополнения друга\n\n"
-        "4️⃣ **Где взять Steam ID?**\n"
-        "   • Откройте свой профиль Steam → щёлкните правой кнопкой мыши → «Копировать URL»\n"
-        "   • Или используйте сайт steamid.io\n\n"
-        "📌 По всем вопросам: @nonuks"
-    )
-    keyboard = InlineKeyboardMarkup(row_width=1).add(InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
-    await callback.message.answer(help_text, parse_mode="Markdown", reply_markup=keyboard)
-    await callback.answer()
-
-@dp.callback_query_handler(lambda c: c.data == "back_to_main")
-async def back_to_main(callback: types.CallbackQuery):
-    welcome_text = (
-        "✨ **Добро пожаловать в магазин Old Crom!** ✨\n\n"
-        "Используйте кнопки ниже для навигации."
-    )
-    await callback.message.answer(welcome_text, parse_mode="Markdown", reply_markup=get_main_keyboard(is_admin(callback.from_user.id)))
-    await callback.answer()
-
+# ------------------ Категории каталога ------------------
 @dp.callback_query_handler(lambda c: c.data.startswith("cat_"))
 async def handle_category(callback: types.CallbackQuery):
     category = callback.data.replace("cat_", "")
@@ -638,6 +683,11 @@ async def handle_category(callback: types.CallbackQuery):
         keyboard.add(InlineKeyboardButton(f"{name} — {price_text}", callback_data=f"buy_{name}"))
     keyboard.add(InlineKeyboardButton("🔙 Назад к категориям", callback_data="show_catalog"))
     await callback.message.answer(f"📦 **Категория:** {category}", parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "show_catalog")
+async def show_catalog(callback: types.CallbackQuery):
+    await callback.message.answer("📁 **Выберите категорию товаров:**", parse_mode="Markdown", reply_markup=get_categories_keyboard())
     await callback.answer()
 
 if __name__ == '__main__':
